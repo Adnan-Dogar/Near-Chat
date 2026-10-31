@@ -8,11 +8,11 @@ android {
     compileSdk = 35
 
     defaultConfig {
-        applicationId = "com.example.neartalk"
-        minSdk = 26
+        applicationId = "com.nearchat.preview"
+        minSdk = 23
         targetSdk = 35
-        versionCode = 4
-        versionName = "0.4.0-demo"
+        versionCode = 5
+        versionName = "0.5.0-install-fix"
         // Firebase client config can be supplied by GitHub Actions secrets / local Gradle properties.
         fun config(name: String): String = (System.getenv(name)?.takeIf { it.isNotBlank() } ?: providers.gradleProperty(name).orNull?.takeIf { it.isNotBlank() } ?: "SET_$name")
             .replace("\\", "\\\\").replace("\"", "\\\"")

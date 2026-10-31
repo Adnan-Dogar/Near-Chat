@@ -4,13 +4,13 @@
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <application
         android:allowBackup="false"
-        android:label="Near-Chat"
+        android:label="Near-Chat Preview"
         android:icon="@mipmap/ic_launcher"
         android:roundIcon="@mipmap/ic_launcher_round"
         android:theme="@style/Theme.NearTalk"
         android:usesCleartextTraffic="false">
-        <activity android:name=".DemoActivity" android:exported="false" android:windowSoftInputMode="adjustResize" />
-        <activity android:name=".MainActivity" android:exported="true" android:windowSoftInputMode="adjustResize">
+        <activity android:name="com.example.neartalk.DemoActivity" android:exported="false" android:windowSoftInputMode="adjustResize" />
+        <activity android:name="com.example.neartalk.MainActivity" android:exported="true" android:windowSoftInputMode="adjustResize">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />

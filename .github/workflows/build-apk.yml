@@ -2,7 +2,7 @@ name: Build Near-Chat Demo APK
 
 on:
   push:
-    branches: [main, "online-mvp"]
+    branches: [main, "online-mvp", "install-preview"]
   workflow_dispatch:
 
 permissions:
