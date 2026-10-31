@@ -4,7 +4,7 @@ import android.app.Activity
 import android.content.Intent
 import android.os.Bundle
 
-/** Standalone demo launcher: no Firebase, servers, account, or internet required. */
+/** Separate Firebase-free preview, opens the working local features immediately. */
 class MainActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)

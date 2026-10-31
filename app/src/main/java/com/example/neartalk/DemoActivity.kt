@@ -5,6 +5,12 @@ import android.app.AlertDialog
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
+import android.Manifest
+import android.content.pm.PackageManager
+import android.media.MediaPlayer
+import android.media.MediaRecorder
+import android.os.Build
+import java.io.File
 import android.content.Intent
 import android.graphics.Color
 import android.graphics.Typeface
@@ -33,12 +39,15 @@ import java.util.UUID
 /** Local, interactive UX preview: nothing in this Activity is sent to other phones. */
 class DemoActivity : Activity() {
     private data class DemoMessage(
-        val text: String,
+        var text: String,
         val mine: Boolean,
         val time: Long,
         var reaction: String = "",
         val mediaUri: String = "",
-        val mediaType: String = ""
+        val mediaType: String = "",
+        val id: String = UUID.randomUUID().toString(),
+        var starred: Boolean = false,
+        var edited: Boolean = false
     )
     private data class DemoChat(
         val id: String,
@@ -46,7 +55,11 @@ class DemoActivity : Activity() {
         val group: Boolean,
         var pinned: Boolean = false,
         var unread: Int = 0,
-        val messages: MutableList<DemoMessage> = mutableListOf()
+        val messages: MutableList<DemoMessage> = mutableListOf(),
+        var archived: Boolean = false,
+        var muted: Boolean = false,
+        var blocked: Boolean = false,
+        var members: String = ""
     )
     private val chats = mutableListOf<DemoChat>()
     private var activeChat: String? = null
@@ -56,6 +69,14 @@ class DemoActivity : Activity() {
     private var dark = true
     private var notifications = true
     private var replyTo: String = ""
+    private var chatFilter = "All"
+    private var showArchived = false
+    private var pendingAttachmentChat: String? = null
+    private var recordingChat: String? = null
+    private var recorder: MediaRecorder? = null
+    private var voiceFile: File? = null
+    private var player: MediaPlayer? = null
+    private val statuses = mutableListOf<Pair<Long, String>>()
     private val prefs by lazy { getSharedPreferences("nearchat_demo_v4", MODE_PRIVATE) }
 
     private val ink get() = if (dark) 0xFFECF5F7.toInt() else 0xFF112B35.toInt()
@@ -87,16 +108,26 @@ class DemoActivity : Activity() {
             val root = JSONArray(saved)
             for (i in 0 until root.length()) {
                 val obj = root.getJSONObject(i)
-                val chat = DemoChat(obj.getString("id"), obj.getString("title"), obj.optBoolean("group"), obj.optBoolean("pinned"), obj.optInt("unread"))
+                val chat = DemoChat(obj.getString("id"), obj.getString("title"), obj.optBoolean("group"), obj.optBoolean("pinned"), obj.optInt("unread"), archived = obj.optBoolean("archived"), muted = obj.optBoolean("muted"), blocked = obj.optBoolean("blocked"), members = obj.optString("members"))
                 val entries = obj.optJSONArray("messages") ?: JSONArray()
                 for (m in 0 until entries.length()) {
                     val msg = entries.getJSONObject(m)
-                    chat.messages.add(DemoMessage(msg.optString("text"), msg.optBoolean("mine"), msg.optLong("time"), msg.optString("reaction"), msg.optString("mediaUri"), msg.optString("mediaType")))
+                    chat.messages.add(DemoMessage(msg.optString("text"), msg.optBoolean("mine"), msg.optLong("time"), msg.optString("reaction"), msg.optString("mediaUri"), msg.optString("mediaType"), msg.optString("id", UUID.randomUUID().toString()), msg.optBoolean("starred"), msg.optBoolean("edited")))
                 }
                 chats.add(chat)
             }
         } catch (_: Exception) { chats.clear() }
         if (chats.isEmpty()) seed()
+        val savedStatuses = prefs.getString("statuses", "") ?: ""
+        if (savedStatuses.isNotEmpty()) try {
+            val root = JSONArray(savedStatuses)
+            for (i in 0 until root.length()) {
+                val item = root.getJSONObject(i)
+                if (System.currentTimeMillis() - item.optLong("time") < 86_400_000L) {
+                    statuses.add(item.optLong("time") to item.optString("text"))
+                }
+            }
+        } catch (_: Exception) {}
     }
 
     private fun seed() {
@@ -119,13 +150,15 @@ class DemoActivity : Activity() {
     private fun save() {
         val arr = JSONArray()
         for (chat in chats) {
-            val obj = JSONObject().put("id", chat.id).put("title", chat.title).put("group", chat.group).put("pinned", chat.pinned).put("unread", chat.unread)
+            val obj = JSONObject().put("id", chat.id).put("title", chat.title).put("group", chat.group).put("pinned", chat.pinned).put("unread", chat.unread).put("archived", chat.archived).put("muted", chat.muted).put("blocked", chat.blocked).put("members", chat.members)
             val messages = JSONArray()
-            for (m in chat.messages) messages.put(JSONObject().put("text", m.text).put("mine", m.mine).put("time", m.time).put("reaction", m.reaction).put("mediaUri", m.mediaUri).put("mediaType", m.mediaType))
+            for (m in chat.messages) messages.put(JSONObject().put("text", m.text).put("mine", m.mine).put("time", m.time).put("reaction", m.reaction).put("mediaUri", m.mediaUri).put("mediaType", m.mediaType).put("id", m.id).put("starred", m.starred).put("edited", m.edited))
             obj.put("messages", messages)
             arr.put(obj)
         }
-        prefs.edit().putString("chats", arr.toString()).putString("name", displayName).putString("about", about).putBoolean("dark", dark).putBoolean("notifications", notifications).apply()
+        val updateArray = JSONArray()
+        for ((time, text) in statuses) updateArray.put(JSONObject().put("time", time).put("text", text))
+        prefs.edit().putString("statuses", updateArray.toString()).putString("chats", arr.toString()).putString("name", displayName).putString("about", about).putBoolean("dark", dark).putBoolean("notifications", notifications).apply()
     }
 
     private fun shape(color: Int, radius: Int, stroke: Int = 0): GradientDrawable = GradientDrawable().apply {
@@ -213,9 +246,8 @@ class DemoActivity : Activity() {
     }
     private fun showChatList(inside: LinearLayout) {
         val welcome = panel(inside).apply { background = shape(if (dark) 0xFF123B3A.toInt() else 0xFFDBF8F0.toInt(), 18) }
-        welcome.addView(label("Your space to connect", 21, ink, true))
-        welcome.addView(label("Explore chats, reactions, status and settings. This preview works without internet or Firebase.", 13, muted))
-        welcome.addView(button("See online setup →", false) { showDemoInfo() }.apply { setPadding(dp(8), dp(11), dp(8), dp(11)) })
+        welcome.addView(label("Near-Chat • your conversations", 19, ink, true))
+        welcome.addView(label("Private on-device preview. Try messages, groups, voice notes, status, photos and documents.", 12, muted))
         val search = EditText(this).apply {
             hint = "⌕  Search chats and messages"; textSize = 14f; setSingleLine(true)
             setTextColor(ink); setHintTextColor(muted)
@@ -227,13 +259,32 @@ class DemoActivity : Activity() {
         actions.addView(View(this), LinearLayout.LayoutParams(dp(10), 1))
         actions.addView(button("♧ New group") { createChat(true) }, LinearLayout.LayoutParams(0, dp(45), 1f))
         inside.addView(actions)
-        blockTitle(inside, "Messages", "Tap a conversation to open the interactive preview")
+        val filters = row().apply { setPadding(0, dp(12), 0, 0) }
+        for (filter in listOf("All", "Unread", "Groups", "Starred")) {
+            val item = label(filter, 12, if (chatFilter == filter) tealDark else ink, chatFilter == filter).apply {
+                gravity = Gravity.CENTER
+                background = shape(if(chatFilter == filter) teal else card, 13)
+                setPadding(dp(8), dp(10), dp(8), dp(10))
+            }
+            filters.addView(item, LinearLayout.LayoutParams(0, dp(40), 1f).apply { rightMargin = dp(5) })
+            item.setOnClickListener { chatFilter = filter; showHome("Chats") }
+        }
+        inside.addView(filters)
+        inside.addView(button(if (showArchived) "← Show active conversations" else "▣ Archived conversations (${chats.count { it.archived }})") {
+            showArchived = !showArchived
+            showHome("Chats")
+        }.apply { setPadding(dp(7), dp(10), dp(7), dp(10)) })
+        blockTitle(inside, if (showArchived) "Archived messages" else "Messages", "Long press to manage a conversation")
         val list = column()
         inside.addView(list)
         fun refresh(query: String) {
             list.removeAllViews()
             val filtered = chats.filter { chat ->
-                query.isBlank() || chat.title.contains(query, true) || chat.messages.any { it.text.contains(query, true) }
+                chat.archived == showArchived &&
+                (chatFilter == "All" || (chatFilter == "Unread" && chat.unread > 0) ||
+                (chatFilter == "Groups" && chat.group) ||
+                (chatFilter == "Starred" && chat.messages.any { it.starred })) &&
+                (query.isBlank() || chat.title.contains(query, true) || chat.messages.any { it.text.contains(query, true) })
             }.sortedWith(compareByDescending<DemoChat> { it.pinned }.thenByDescending { it.messages.lastOrNull()?.time ?: 0L })
             if (filtered.isEmpty()) list.addView(label("No chats found. Create a new conversation.", 13, muted))
             for (chat in filtered) renderChatRow(list, chat)
@@ -254,7 +305,7 @@ class DemoActivity : Activity() {
         r.addView(avatar(if (chat.group) "♧" else chat.title, colorFor(chat.title)), LinearLayout.LayoutParams(dp(49), dp(49)))
         val center = column().apply { setPadding(dp(13), 0, 0, 0) }
         val nameRow = row()
-        nameRow.addView(label(chat.title + (if (chat.pinned) "  📌" else ""), 15, ink, true), LinearLayout.LayoutParams(0, -2, 1f))
+        nameRow.addView(label(chat.title + (if (chat.pinned) "  📌" else "") + (if (chat.muted) "  🔕" else "") + (if (chat.blocked) "  ⛔" else ""), 15, ink, true), LinearLayout.LayoutParams(0, -2, 1f))
         nameRow.addView(label(formatTime(chat.messages.lastOrNull()?.time ?: System.currentTimeMillis()), 11, muted))
         center.addView(nameRow)
         val last = chat.messages.lastOrNull()?.text ?: "Start a conversation"
@@ -267,12 +318,14 @@ class DemoActivity : Activity() {
         r.addView(center, LinearLayout.LayoutParams(0, -2, 1f))
         r.setOnClickListener { openChat(chat.id) }
         r.setOnLongClickListener {
-            val options = arrayOf(if (chat.pinned) "Unpin" else "Pin", "Mark as read", "Delete demo conversation")
+            val options = arrayOf(if (chat.pinned) "Unpin" else "Pin", "Mark as read", if (chat.archived) "Unarchive" else "Archive", if (chat.muted) "Unmute" else "Mute", "Delete local conversation")
             AlertDialog.Builder(this).setTitle(chat.title).setItems(options) { _, index ->
                 when(index) {
                     0 -> chat.pinned = !chat.pinned
                     1 -> chat.unread = 0
-                    2 -> chats.remove(chat)
+                    2 -> chat.archived = !chat.archived
+                    3 -> chat.muted = !chat.muted
+                    4 -> chats.remove(chat)
                 }
                 save(); showHome("Chats")
             }.show()
@@ -307,18 +360,30 @@ class DemoActivity : Activity() {
         scroller.post { scroller.fullScroll(View.FOCUS_DOWN) }
         val compose = row().apply { setPadding(dp(8), dp(9), dp(8), dp(12)); setBackgroundColor(card) }
         compose.addView(button("＋") { chooseAttachment(chat.id) })
+        compose.addView(button("🎙") { toggleRecording(chat.id) })
         val field = EditText(this).apply {
-            hint = "Message…"; textSize = 15f; setTextColor(ink); setHintTextColor(muted)
+            hint = if (chat.blocked) "Unblock to message" else "Message…"; textSize = 15f; setTextColor(ink); setHintTextColor(muted)
+            isEnabled = !chat.blocked
+            setText(prefs.getString("draft_${chat.id}", ""))
+            addTextChangedListener(object : TextWatcher {
+                override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
+                override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
+                    prefs.edit().putString("draft_${chat.id}", s?.toString().orEmpty().take(4000)).apply()
+                }
+                override fun afterTextChanged(s: Editable?) {}
+            })
             setPadding(dp(12), dp(9), dp(12), dp(9)); background = shape(soft, 20); maxLines = 4
         }
         messageField = field
         compose.addView(field, LinearLayout.LayoutParams(0, -2, 1f).apply { leftMargin = dp(8); rightMargin = dp(8) })
         compose.addView(button("➤", true) {
             val body = field.text.toString().trim()
+            if (chat.blocked) { toast("Unblock this demo contact to message"); return@button }
             if (body.isNotBlank()) {
                 val text = if (replyTo.isBlank()) body else "↳ $replyTo\n$body"
                 chat.messages.add(DemoMessage(text, true, System.currentTimeMillis()))
                 replyTo = ""; save(); field.text.clear()
+                prefs.edit().remove("draft_${chat.id}").apply()
                 openChat(chat.id)
             }
         })
@@ -335,58 +400,201 @@ class DemoActivity : Activity() {
                 bubble.addView(preview, LinearLayout.LayoutParams(dp(175), dp(140)))
             } catch (_: Exception) { bubble.addView(label("Image preview unavailable", 12, if(message.mine) tealDark else muted)) }
         }
-        if (message.text.isNotBlank()) bubble.addView(label(message.text, 14, if (message.mine) tealDark else ink))
+        if (message.mediaUri.isNotBlank() && message.mediaType == "voice") {
+            bubble.addView(button("▶ Play voice note", false) { playVoice(message.mediaUri) })
+        }
+        if (message.mediaUri.isNotBlank() && message.mediaType == "document") {
+            bubble.addView(button("📄 Open document", false) { openDocument(message.mediaUri) })
+        }
+        if (message.text.isNotBlank()) bubble.addView(label(message.text + (if (message.edited) "  (edited)" else ""), 14, if (message.mine) tealDark else ink))
         val foot = row()
         foot.addView(label(formatTime(message.time) + if (message.mine) "  ✓" else "", 10, if (message.mine) 0xFF245F53.toInt() else muted))
+        if (message.starred) foot.addView(label("  ★", 15, if (message.mine) tealDark else teal))
         if (message.reaction.isNotBlank()) foot.addView(label("  ${message.reaction}", 15))
         bubble.addView(foot)
         wrap.addView(bubble, LinearLayout.LayoutParams(-2, -2).apply { rightMargin = if(message.mine) 0 else dp(58); leftMargin = if(message.mine) dp(58) else 0 })
         bubble.setOnLongClickListener {
+            val actions = arrayOf("❤️ React", "😂 React", "👍 React", "↩ Reply", "☆ Star / unstar", "↪ Forward in demo", "Copy text", "Edit own message", "Delete for me", "Remove reaction")
             AlertDialog.Builder(this).setTitle("Message actions")
-                .setItems(arrayOf("❤️ React", "😂 React", "👍 React", "↩ Reply", "Copy text", "Remove reaction")) { _, index ->
-                    when(index) {
+                .setItems(actions) { _, index ->
+                    when (index) {
                         0, 1, 2 -> { message.reaction = listOf("❤️", "😂", "👍")[index]; save(); openChat(chat.id) }
-                        3 -> { replyTo = message.text.take(55); messageField?.hint = "Replying to: ${replyTo.take(28)}"; messageField?.requestFocus() }
-                        4 -> { val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager; clipboard.setPrimaryClip(ClipData.newPlainText("demo message", message.text)); toast("Copied") }
-                        5 -> { message.reaction = ""; save(); openChat(chat.id) }
+                        3 -> { replyTo = message.text.take(55); messageField?.hint = "Replying to: ${replyTo.take(24)}"; messageField?.requestFocus() }
+                        4 -> { message.starred = !message.starred; save(); openChat(chat.id) }
+                        5 -> forwardMessage(chat, message)
+                        6 -> { val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager; clipboard.setPrimaryClip(ClipData.newPlainText("message", message.text)); toast("Copied") }
+                        7 -> if (message.mine) editMessage(chat, message) else toast("You can only edit your own messages")
+                        8 -> AlertDialog.Builder(this).setTitle("Delete from this phone?")
+                            .setMessage("This does not delete a message on anyone else's phone.")
+                            .setNegativeButton("Cancel", null).setPositiveButton("Delete") { _, _ -> chat.messages.remove(message); save(); openChat(chat.id) }.show()
+                        9 -> { message.reaction = ""; save(); openChat(chat.id) }
                     }
-                }.show(); true
+                }.show()
+            true
         }
         parent.addView(wrap, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(12) })
     }
+    private fun editMessage(chat: DemoChat, message: DemoMessage) {
+        val field = EditText(this).apply { setText(message.text); setSelection(text.length); setPadding(dp(12), dp(12), dp(12), dp(12)) }
+        AlertDialog.Builder(this).setTitle("Edit message").setView(field)
+            .setNegativeButton("Cancel", null).setPositiveButton("Save") { _, _ ->
+                val result = field.text.toString().trim()
+                if (result.isNotEmpty()) { message.text = result.take(4000); message.edited = true; save(); openChat(chat.id) }
+            }.show()
+    }
+    private fun forwardMessage(source: DemoChat, message: DemoMessage) {
+        val targets = chats.filter { it.id != source.id && !it.blocked }
+        if (targets.isEmpty()) { toast("Create another chat first"); return }
+        AlertDialog.Builder(this).setTitle("Forward to demo chat")
+            .setItems(targets.map { it.title }.toTypedArray()) { _, which ->
+                val target = targets[which]
+                target.messages.add(DemoMessage("↪ Forwarded\n${message.text}", true, System.currentTimeMillis()))
+                save(); toast("Forwarded locally to ${target.title}")
+            }.show()
+    }
     private fun chooseAttachment(chatId: String) {
-        AlertDialog.Builder(this).setTitle("Attach to this demo chat")
-            .setItems(arrayOf("Pick an image from this phone", "Add a sample location card", "Voice note (planned)", "Document sharing (planned)")) { _, which ->
+        pendingAttachmentChat = chatId
+        AlertDialog.Builder(this).setTitle("Attach locally to this conversation")
+            .setItems(arrayOf("🖼 Choose photo", "📄 Choose document", "🎙 Record voice note", "📍 Add sample location")) { _, which ->
                 when(which) {
-                    0 -> try {
-                        val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply { type = "image/*"; addCategory(Intent.CATEGORY_OPENABLE) }
-                        startActivityForResult(intent, PICK_IMAGE)
-                    } catch (_: Exception) { toast("No image picker available") }
-                    1 -> { chats.firstOrNull { it.id == chatId }?.messages?.add(DemoMessage("📍 Sample location (preview only)", true, System.currentTimeMillis())); save(); openChat(chatId) }
-                    else -> noticePlanned("Media sharing and voice notes")
+                    0, 1 -> try {
+                        val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+                            type = if (which == 0) "image/*" else "*/*"
+                            addCategory(Intent.CATEGORY_OPENABLE)
+                            if (which == 1) putExtra(Intent.EXTRA_MIME_TYPES, arrayOf("application/pdf", "text/plain", "application/zip"))
+                        }
+                        startActivityForResult(intent, if (which == 0) PICK_IMAGE else PICK_DOCUMENT)
+                    } catch (_: Exception) { toast("No file picker available") }
+                    2 -> toggleRecording(chatId)
+                    3 -> { chats.firstOrNull { it.id == chatId }?.messages?.add(DemoMessage("📍 Sample location · Local preview", true, System.currentTimeMillis())); save(); openChat(chatId) }
                 }
             }.show()
+    }
+    private fun toggleRecording(chatId: String) {
+        if (recordingChat != null) { stopRecording(true); return }
+        if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+            pendingAttachmentChat = chatId
+            requestPermissions(arrayOf(Manifest.permission.RECORD_AUDIO), REQUEST_MIC)
+            return
+        }
+        startRecording(chatId)
+    }
+    @Suppress("DEPRECATION")
+    private fun startRecording(chatId: String) {
+        try {
+            val file = File(filesDir, "voice_${UUID.randomUUID()}.m4a")
+            val rec = if (Build.VERSION.SDK_INT >= 31) MediaRecorder(this) else MediaRecorder()
+            rec.setAudioSource(MediaRecorder.AudioSource.MIC)
+            rec.setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
+            rec.setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
+            rec.setOutputFile(file.absolutePath)
+            rec.prepare(); rec.start()
+            voiceFile = file; recorder = rec; recordingChat = chatId
+            AlertDialog.Builder(this).setTitle("Recording voice note")
+                .setMessage("Recording from this phone's microphone. Audio stays on this device.")
+                .setPositiveButton("Stop and save") { _, _ -> stopRecording(true) }
+                .setNegativeButton("Discard") { _, _ -> stopRecording(false) }
+                .setOnCancelListener { stopRecording(false) }
+                .show()
+        } catch (e: Exception) { stopRecording(false); toast("Microphone unavailable: ${e.message}") }
+    }
+    private fun stopRecording(saveNote: Boolean) {
+        val chatId = recordingChat
+        val file = voiceFile
+        try { recorder?.stop() } catch (_: Exception) { /* Too short or no input */ }
+        try { recorder?.release() } catch (_: Exception) {}
+        recorder = null; recordingChat = null; voiceFile = null
+        if (saveNote && chatId != null && file != null && file.exists() && file.length() > 300) {
+            chats.firstOrNull { it.id == chatId }?.messages?.add(DemoMessage("Voice note", true, System.currentTimeMillis(), mediaUri = Uri.fromFile(file).toString(), mediaType = "voice"))
+            save(); openChat(chatId)
+        } else { file?.delete(); if (saveNote) toast("Recording was too short") }
+    }
+    private fun playVoice(uri: String) {
+        try {
+            player?.release()
+            player = MediaPlayer().apply {
+                setDataSource(this@DemoActivity, Uri.parse(uri))
+                setOnCompletionListener { it.release(); if (player === it) player = null }
+                prepare(); start()
+            }
+        } catch (_: Exception) { toast("Voice note unavailable") }
+    }
+    private fun openDocument(uri: String) {
+        try {
+            val parsed = Uri.parse(uri)
+            val mime = contentResolver.getType(parsed) ?: "*/*"
+            startActivity(Intent(Intent.ACTION_VIEW).apply {
+                setDataAndType(parsed, mime)
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            })
+        } catch (_: Exception) { toast("No compatible document viewer installed") }
+    }
+    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode == REQUEST_MIC && grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED) {
+            pendingAttachmentChat?.let { startRecording(it) }
+        } else if (requestCode == REQUEST_MIC) toast("Microphone permission is needed to record voice notes")
     }
     @Deprecated("Activity result is sufficient for this small Android preview")
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
-        if (requestCode == PICK_IMAGE && resultCode == RESULT_OK) {
+        if ((requestCode == PICK_IMAGE || requestCode == PICK_DOCUMENT) && resultCode == RESULT_OK) {
             val uri = data?.data ?: return
             try { contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION) } catch (_: Exception) {}
-            val chat = chats.firstOrNull { it.id == activeChat } ?: return
-            chat.messages.add(DemoMessage("Photo preview", true, System.currentTimeMillis(), mediaUri = uri.toString(), mediaType = "image"))
+            val chat = chats.firstOrNull { it.id == pendingAttachmentChat } ?: return
+            val isImage = requestCode == PICK_IMAGE
+            val type = if (isImage) "image" else "document"
+            val caption = if (isImage) "Photo" else "Document"
+            chat.messages.add(DemoMessage(caption, true, System.currentTimeMillis(), mediaUri = uri.toString(), mediaType = type))
             save(); openChat(chat.id)
         }
     }
     private fun chatOptions(chat: DemoChat) {
-        AlertDialog.Builder(this).setTitle(chat.title).setItems(arrayOf("View contact/group", if(chat.pinned) "Unpin" else "Pin", "Clear this demo chat", "Voice call (planned)", "Video call (planned)")) { _, index ->
+        val options = arrayOf("Contact / group info", "Edit chat title", if(chat.pinned) "Unpin" else "Pin", if(chat.archived) "Unarchive" else "Archive", if(chat.muted) "Unmute" else "Mute", if (chat.blocked) "Unblock" else "Block locally", "★ Starred messages", "↥ Export chat text", "Clear conversation", "Voice & video calls (not connected)")
+        AlertDialog.Builder(this).setTitle(chat.title).setItems(options) { _, index ->
             when(index) {
-                0 -> AlertDialog.Builder(this).setTitle(chat.title).setMessage(if(chat.group) "Preview group • ${chat.messages.size} local messages" else "Preview contact • No real account connected").setPositiveButton("OK", null).show()
-                1 -> { chat.pinned = !chat.pinned; save(); toast("Updated") }
-                2 -> AlertDialog.Builder(this).setMessage("Delete the messages saved for this demo conversation?").setNegativeButton("Cancel", null).setPositiveButton("Clear") { _, _ -> chat.messages.clear(); save(); openChat(chat.id) }.show()
-                else -> noticePlanned("Voice/video calling")
+                0 -> showChatInfo(chat)
+                1 -> editChatTitle(chat)
+                2 -> { chat.pinned = !chat.pinned; save(); openChat(chat.id) }
+                3 -> { chat.archived = !chat.archived; save(); showHome("Chats") }
+                4 -> { chat.muted = !chat.muted; save(); openChat(chat.id) }
+                5 -> { chat.blocked = !chat.blocked; save(); openChat(chat.id) }
+                6 -> AlertDialog.Builder(this).setTitle("Starred messages")
+                    .setMessage(chat.messages.filter { it.starred }.joinToString("\n\n") { it.text }.ifBlank { "No starred messages yet. Long press any message to star it." })
+                    .setPositiveButton("Close", null).show()
+                7 -> shareChat(chat)
+                8 -> AlertDialog.Builder(this).setTitle("Clear locally?")
+                    .setMessage("Delete every message in this conversation on this phone?")
+                    .setNegativeButton("Cancel", null).setPositiveButton("Clear") { _, _ -> chat.messages.clear(); save(); openChat(chat.id) }.show()
+                else -> noticePlanned("Voice/video calls")
             }
         }.show()
+    }
+    private fun showChatInfo(chat: DemoChat) {
+        AlertDialog.Builder(this).setTitle("${chat.title} · details")
+            .setMessage("${if(chat.group) "Local group" else "Local contact"}\nMessages: ${chat.messages.size}\n${if(chat.group) "Members: " + chat.members.ifEmpty { "You (demo)" } else "No online account connected"}\n\nMuted: ${chat.muted}\nArchived: ${chat.archived}\nBlocked: ${chat.blocked}")
+            .setNeutralButton(if (chat.group) "Edit members" else "Close") { _, _ -> if (chat.group) {
+                val entry = EditText(this).apply { setText(chat.members); hint = "Names separated by commas" }
+                AlertDialog.Builder(this).setTitle("Demo group members").setView(entry)
+                    .setNegativeButton("Cancel", null).setPositiveButton("Save") { _, _ -> chat.members = entry.text.toString().take(400); save() }.show()
+            } }.setPositiveButton("Done", null).show()
+    }
+    private fun editChatTitle(chat: DemoChat) {
+        val field = EditText(this).apply { setText(chat.title); setSelection(text.length) }
+        AlertDialog.Builder(this).setTitle("Rename local conversation").setView(field)
+            .setNegativeButton("Cancel", null).setPositiveButton("Save") { _, _ ->
+                val name = field.text.toString().trim()
+                if(name.length >= 2) { chat.title = name.take(40); save(); openChat(chat.id) }
+            }.show()
+    }
+    private fun shareChat(chat: DemoChat) {
+        val text = buildString {
+            appendLine("Near-Chat local conversation with ${chat.title}")
+            for (message in chat.messages) appendLine("[${formatTime(message.time)}] ${if(message.mine) displayName else chat.title}: ${message.text}")
+        }
+        startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).apply {
+            type = "text/plain"; putExtra(Intent.EXTRA_TEXT, text)
+        }, "Export conversation text"))
     }
     private fun createChat(group: Boolean) {
         val field = EditText(this).apply { hint = if(group) "New group name" else "Friend's display name"; setSingleLine(true); setPadding(dp(18), dp(18), dp(18), dp(18)) }
@@ -408,7 +616,11 @@ class DemoActivity : Activity() {
         val c = column().apply { setPadding(dp(13), 0, 0, 0) }
         c.addView(label("My status", 17, ink, true)); c.addView(label(about.take(65), 12, muted))
         r.addView(c, LinearLayout.LayoutParams(0, -2, 1f)); own.addView(r)
-        own.addView(button("Update my text status", true) { editAbout() })
+        own.addView(button("＋ Post local 24-hour status", true) { createLocalStatus() })
+        for ((time, text) in statuses.sortedByDescending { it.first }) {
+            own.addView(label("● ${formatTime(time)} · $text", 13, ink).apply { setPadding(0, dp(9), 0, 0) })
+        }
+        own.addView(label("Only this phone can see these posts. They expire after 24 hours.", 11, muted))
         blockTitle(parent, "Recent updates")
         for ((name, caption) in listOf("Sarah Khan" to "New week, new possibilities ✨", "Daniel" to "Coffee and good conversations ☕", "Aisha" to "Weekend adventures 🌿")) {
             val item = panel(parent)
@@ -423,6 +635,14 @@ class DemoActivity : Activity() {
                     .setPositiveButton("Close", null).show()
             }
         }
+    }
+    private fun createLocalStatus() {
+        val field = EditText(this).apply { hint = "What's new?"; minLines = 2; maxLines = 4 }
+        AlertDialog.Builder(this).setTitle("Post status on this phone").setView(field)
+            .setNegativeButton("Cancel", null).setPositiveButton("Post") { _, _ ->
+                val text = field.text.toString().trim()
+                if (text.isNotEmpty()) { statuses.add(System.currentTimeMillis() to text.take(280)); save(); showHome("Updates") }
+            }.show()
     }
     private fun showCalls(parent: LinearLayout) {
         blockTitle(parent, "Calls", "Explore the interface. Calling needs real-time online services.")
@@ -458,10 +678,16 @@ class DemoActivity : Activity() {
         settingRow(settings, "♧", "Notifications", if(notifications) "On (preview setting)" else "Off") { notifications = !notifications; save(); showHome("You") }
         settingRow(settings, "♢", "Privacy & security", "Learn what this demo stores") { AlertDialog.Builder(this).setTitle("Privacy in demo mode").setMessage("Everything shown here is stored locally on this phone. No friend receives your messages. Sample profiles and call history are fictional. This demo has no end-to-end encrypted network messaging.").setPositiveButton("OK", null).show() }
         settingRow(settings, "⚙", "Accounts & online mode", "Connect Firebase for actual users") { showDemoInfo() }
+        settingRow(settings, "★", "Starred messages", "Saved across your local chats") {
+            val starred = chats.flatMap { c -> c.messages.filter { it.starred }.map { "${c.title}: ${it.text}" } }
+            AlertDialog.Builder(this).setTitle("Starred messages")
+                .setMessage(starred.joinToString("\n\n").ifBlank { "Long press a message and tap Star." })
+                .setPositiveButton("Close", null).show()
+        }
         blockTitle(parent, "More")
         val more = panel(parent)
         settingRow(more, "✦", "Plans & features", "What's included now and what's planned") { showPlans() }
-        settingRow(more, "?", "About Near-Chat", "Version 0.4 · Interactive preview") { showDemoInfo() }
+        settingRow(more, "?", "About Near-Chat", "Version 0.6 · Local feature preview") { showDemoInfo() }
         settingRow(more, "↻", "Reset sample conversations", "Restore the original demo data") {
             AlertDialog.Builder(this).setTitle("Reset demo?").setMessage("This deletes your locally added demo messages and chats.")
                 .setNegativeButton("Cancel", null).setPositiveButton("Reset") { _, _ -> chats.clear(); seed(); showHome("Chats") }.show()
@@ -495,7 +721,7 @@ class DemoActivity : Activity() {
     }
     private fun showPlans() {
         AlertDialog.Builder(this).setTitle("Near-Chat feature plan")
-            .setMessage("AVAILABLE IN THIS FREE DEMO\n• Chat list & search\n• Local messages & reactions\n• Local groups & photo preview\n• Status updates preview\n• Profile & appearance settings\n\nREQUIRES AN ONLINE BACKEND\n• Real accounts & messaging\n• Friends across countries\n• Shared groups & status\n• Push notifications\n• Live voice/video calls\n\nNo paid plan, purchases, or subscriptions are active.")
+            .setMessage("AVAILABLE LOCALLY\n• Conversations, search, drafts\n• Replies, edit, forward, star, delete, reactions\n• Photo and document attachments\n• Record and play voice notes\n• Group names and members\n• Block, mute, pin, archive, export\n• 24-hour local text status\n• Profile, dark/light, settings\n\nNEEDS ONLINE SERVICES\n• Cross-device chat and sync\n• Phone/email login, contact search\n• Shared group/status updates\n• Push notifications and real voice/video calls\n• End-to-end encryption/security audit\n\nNo paid plan or subscription is active.")
             .setPositiveButton("Got it", null).show()
     }
     private fun showDemoInfo() {
@@ -504,8 +730,17 @@ class DemoActivity : Activity() {
             .setPositiveButton("OK", null).show()
     }
     private fun noticePlanned(feature: String) { AlertDialog.Builder(this).setTitle("$feature — coming later").setMessage("This feature is planned for Near-Chat Online. It is not active in the local demo, and the app won't pretend to connect or call other people.").setPositiveButton("OK", null).show() }
+    override fun onDestroy() {
+        if (recorder != null) stopRecording(false)
+        player?.release(); player = null
+        super.onDestroy()
+    }
     override fun onBackPressed() {
         if (activeChat != null) showHome("Chats") else if(tab != "Chats") showHome("Chats") else super.onBackPressed()
     }
-    companion object { private const val PICK_IMAGE = 921 }
+    companion object {
+        private const val PICK_IMAGE = 921
+        private const val PICK_DOCUMENT = 922
+        private const val REQUEST_MIC = 923
+    }
 }
