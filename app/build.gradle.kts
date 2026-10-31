@@ -14,7 +14,7 @@ android {
         versionCode = 3
         versionName = "0.3.0-online"
         // Firebase client config can be supplied by GitHub Actions secrets / local Gradle properties.
-        fun config(name: String): String = (System.getenv(name) ?: providers.gradleProperty(name).orNull ?: "SET_$name")
+        fun config(name: String): String = (System.getenv(name)?.takeIf { it.isNotBlank() } ?: providers.gradleProperty(name).orNull?.takeIf { it.isNotBlank() } ?: "SET_$name")
             .replace("\\", "\\\\").replace("\"", "\\\"")
         buildConfigField("String", "FIREBASE_API_KEY", "\"${config("FIREBASE_API_KEY")}\"")
         buildConfigField("String", "FIREBASE_APP_ID", "\"${config("FIREBASE_APP_ID")}\"")
@@ -25,7 +25,12 @@ android {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
-    kotlinOptions { jvmTarget = "17" }
+}
+
+kotlin {
+    compilerOptions {
+        jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
+    }
 }
 
 dependencies {
