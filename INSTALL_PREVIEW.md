@@ -1,9 +1,15 @@
-# Near-Chat Preview — installation compatibility build
+# Near-Chat Preview v0.5 — installation compatibility build
 
-This preview is installable **alongside** existing Near-Chat packages. It uses a separate Android application ID `com.nearchat.preview` to avoid signature mismatch conflicts with the previous `com.example.neartalk` APK. It supports Android 6.0+ (API 23) if the device's security policies permit installation.
+This is a **local, interactive demo** with the Near-Chat logo, sample chats, reactions, groups, status, settings, and other preview features.
 
-The preview runs without Firebase configuration and includes fake sample messages and local interactions only. No real online messages are sent in demo mode. You can keep or uninstall your older Near-Chat installation separately.
+- **No Firebase configuration, internet permission, login, or server** is required.
+- Installs beside older Near-Chat builds, using Android package `com.nearchat.preview`.
+- Supports Android 6.0+ (API 23). Actual installation still depends on device policy and free space.
+- **No real online messages, calls, or stories are sent or received.** Those screens are demonstrations.
+- This preview does not require you to uninstall the old app or lose its data.
 
-**Installing:** download `app-debug.apk` from GitHub Actions for the `install-preview` branch. Open it with Android's package installer and allow installation from the source you used. If Android reports an error, note the exact wording and Android version. Do not disable device security features just to install the app.
+Download the **NearChat-demo-preview-APK** from the successful GitHub Actions build for the `install-preview` branch. Extract the ZIP and install `app-debug.apk`.
 
-**Developer note:** GitHub-hosted runners generate a new debug signing key on each fresh runner. For repeatable updates under the *same* application ID, configure a stable release signing key through GitHub secrets and sign release builds. This preview is a separate package, not a final production signing solution.
+The GitHub-generated **debug signature can change between runs**. For a lasting public app, release signing with a securely stored persistent key is required.
+
+If installation still fails, record the exact error and Android version, because device restrictions, permissions, storage, and Play Protect warnings have different fixes. Only install applications you trust; don't disable phone protection to force installation.
