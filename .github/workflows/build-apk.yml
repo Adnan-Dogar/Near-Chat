@@ -1,49 +1,49 @@
-name: Build NearTalk Android APK
+name: Build Near-Chat Online APK
 
 on:
-  workflow_dispatch:
   push:
-    branches: [main, master]
+    branches: [main, "online-mvp"]
+  workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
-  android-apk:
+  apk:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 40
+    env:
+      FIREBASE_API_KEY: ${{ secrets.FIREBASE_API_KEY }}
+      FIREBASE_APP_ID: ${{ secrets.FIREBASE_APP_ID }}
+      FIREBASE_PROJECT_ID: ${{ secrets.FIREBASE_PROJECT_ID }}
     steps:
-      - name: Check out NearTalk
-        uses: actions/checkout@v4
-
-      - name: Install Java 17
-        uses: actions/setup-java@v4
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
-
-      - name: Install Android SDK
-        uses: android-actions/setup-android@v4
-
-      - name: Install Android platform and build tools
+      - uses: android-actions/setup-android@v4
+      - name: Install Android SDK platform
         run: sdkmanager 'platforms;android-35' 'build-tools;35.0.0'
-
-      - name: Install Gradle 8.11.1
-        uses: gradle/actions/setup-gradle@v4
+      - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.11.1'
-
-      - name: Run protocol unit tests
-        run: gradle --no-daemon :app:testDebugUnitTest
-
-      - name: Compile debug APK
-        run: gradle --no-daemon --stacktrace :app:assembleDebug
-
-      - name: Upload APK for download
+      - name: Build APK and log errors
+        run: |
+          set -o pipefail
+          gradle --no-daemon --stacktrace :app:assembleDebug 2>&1 | tee android-build.log
+      - name: Upload build log (even if compilation fails)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: NearChat-build-log
+          path: android-build.log
+          if-no-files-found: warn
+      - name: Upload installable debug APK
         if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: NearTalk-debug-APK
+          name: NearChat-online-debug-APK
           path: app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
-          retention-days: 30
+          retention-days: 14

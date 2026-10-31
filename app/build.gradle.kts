@@ -11,20 +11,26 @@ android {
         applicationId = "com.example.neartalk"
         minSdk = 26
         targetSdk = 35
-        versionCode = 2
-        versionName = "0.2.0"
+        versionCode = 3
+        versionName = "0.3.0-online"
+        // Firebase client config can be supplied by GitHub Actions secrets / local Gradle properties.
+        fun config(name: String): String = (System.getenv(name) ?: providers.gradleProperty(name).orNull ?: "SET_$name")
+            .replace("\\", "\\\\").replace("\"", "\\\"")
+        buildConfigField("String", "FIREBASE_API_KEY", "\"${config("FIREBASE_API_KEY")}\"")
+        buildConfigField("String", "FIREBASE_APP_ID", "\"${config("FIREBASE_APP_ID")}\"")
+        buildConfigField("String", "FIREBASE_PROJECT_ID", "\"${config("FIREBASE_PROJECT_ID")}\"")
     }
-
+    buildFeatures { buildConfig = true }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
-    kotlinOptions {
-        jvmTarget = "17"
-    }
+    kotlinOptions { jvmTarget = "17" }
 }
 
 dependencies {
-    implementation("com.google.android.gms:play-services-nearby:19.5.1")
+    implementation(platform("com.google.firebase:firebase-bom:35.1.0"))
+    implementation("com.google.firebase:firebase-auth")
+    implementation("com.google.firebase:firebase-firestore")
     testImplementation("junit:junit:4.13.2")
 }

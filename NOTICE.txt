@@ -1,2 +1,0 @@
-NearTalk starter source code is provided for learning/prototyping and has not been verified on real Android devices.
-The project references third-party Google Play services libraries which are downloaded separately by Gradle and subject to their own licenses and terms.
