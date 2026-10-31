@@ -4,7 +4,7 @@
     <uses-feature android:name="android.hardware.microphone" android:required="false" />
     <application
         android:allowBackup="false"
-        android:label="Near-Chat Preview"
+        android:label="Near-Chat Features"
         android:icon="@mipmap/ic_launcher"
         android:roundIcon="@mipmap/ic_launcher_round"
         android:theme="@style/Theme.NearTalk"

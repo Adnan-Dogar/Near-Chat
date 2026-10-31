@@ -6,7 +6,7 @@ android {
     namespace = "com.example.neartalk"
     compileSdk = 35
     defaultConfig {
-        applicationId = "com.nearchat.preview"
+        applicationId = "com.nearchat.features.preview"
         minSdk = 23
         targetSdk = 35
         versionCode = 6

@@ -1,6 +1,6 @@
 # Near-Chat Preview v0.6 — local feature preview
 
-A working on-device prototype of a modern messaging interface. Installs side-by-side with the Near-Chat online MVP because the app ID is `com.nearchat.preview`. Android 6.0+ (API 23), no Firebase credentials, no internet permission.
+A working on-device prototype of a modern messaging interface. Installs side-by-side with earlier Near-Chat builds (including Preview v0.5) because the app ID is `com.nearchat.features.preview`. Android 6.0+ (API 23), no Firebase credentials, no internet permission.
 
 ## Working offline on one phone
 
