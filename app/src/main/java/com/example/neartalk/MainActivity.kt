@@ -353,7 +353,7 @@ class MainActivity : Activity() {
     override fun onDestroy() { clearListeners(); super.onDestroy() }
 
     private fun screen(title: String): LinearLayout {
-        val scroll = ScrollView(this).apply { setBackgroundColor(bg); fillViewport = true }
+        val scroll = ScrollView(this).apply { setBackgroundColor(bg); setFillViewport(true) }
         val content = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(22), dp(26), dp(22), dp(26)) }
         scroll.addView(content)
         setContentView(scroll)
