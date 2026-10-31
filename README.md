@@ -1,20 +1,32 @@
-# Near-Chat Online · Android MVP
+# Near-Chat Android • v0.4 Interactive Demo
 
-A new **online-first** direction for Near-Chat built with Kotlin, Firebase Authentication, and Cloud Firestore. It intentionally replaces the previous offline Nearby messaging home screen in this branch while preserving the old branch's source history.
+An online-chat Android MVP with a **fully navigable local demo** that needs no Firebase login, API keys, or internet connection. The primary build is a **demo**, not a real messaging service.
 
-## Included
+## Try without Firebase
 
-- Sign up and sign in with email and password
-- Share a 12-character friend code; search by code and start a one-to-one conversation
-- Create small groups of up to 8 members by friend codes
-- Live updating chat lists and messages (app in foreground)
-- Basic profile status and sign out
-- Firestore security rules and GitHub Actions APK build workflow
+Install the debug APK and open Near-Chat. If no Firebase configuration has been provided, the app goes directly into local Demo Mode with preloaded sample conversations. No setup wall. You can also open Demo Mode from the live sign-in page if Firebase has been configured.
 
-## Setup
+### Demo interactions
 
-Read **[SETUP_FIREBASE.md](SETUP_FIREBASE.md)**. Creating the APK is not sufficient; the backend must be configured with Firebase settings and security rules.
+- Newly designed teal Near-Chat launcher icon and branded header
+- Chat list, search across messages, pinned and unread states
+- Conversation pages, local send, saved demo history, reply and emoji reactions
+- Create sample contacts and group conversations on this phone
+- Pick a photo to preview as a local attachment
+- Status screen with interactive sample stories and editable own status
+- Calls screen with sample history; voice/video actions clearly **planned**, not active
+- Profile, about, appearance (dark/light), notification preference, privacy, plans and reset
 
-## Status and safety
+## Important limitations
 
-This is a development prototype. **Not end-to-end encrypted**, no notifications, no media sharing/calls/stories/social feed yet, and not tested on physical phones. Do not treat this as a ready-to-publish WhatsApp/Facebook replacement. Before public launch, implement moderation, blocking, reporting, secure account recovery, privacy policy, safe media handling, abuse prevention, accessibility, and load testing.
+Demo Mode does NOT deliver messages to another phone, sync any chats, notify other users, make calls or run end-to-end encryption. Fake contacts and sample call history are labeled previews. Local demo data is saved in private app preferences, not uploaded.
+
+### Real online messaging
+
+The Firebase-powered v0.3-style one-to-one/small-group messaging code still exists separately in `MainActivity.kt` and activates only when valid Firebase project settings are compiled into the app. See [SETUP_FIREBASE.md](SETUP_FIREBASE.md) and deploy [firestore.rules](firestore.rules). Firestore rules and security, account recovery, moderation, push notifications and encryption require additional work before any public launch.
+
+## Build
+
+GitHub Actions on `main` compiles a debug APK and uploads it as an artifact. The launcher demo works out of the box without configuration. Build uses Android SDK 35, JDK 17, Gradle 8.11.1, Kotlin 2.4 and Firebase Android SDK.
+
+**Roadmap:** validate demo → connect real backend → private chats & identity → notifications & media → safety, blocking and reporting → secure real-time calls → deeper social features.

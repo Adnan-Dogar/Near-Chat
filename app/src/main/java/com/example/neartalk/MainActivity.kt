@@ -1,6 +1,7 @@
 package com.example.neartalk
 
 import android.app.Activity
+import android.content.Intent
 import android.app.AlertDialog
 import android.content.ClipData
 import android.content.ClipboardManager
@@ -51,10 +52,8 @@ class MainActivity : Activity() {
         if (BuildConfig.FIREBASE_API_KEY.startsWith("SET_") ||
             BuildConfig.FIREBASE_APP_ID.startsWith("SET_") ||
             BuildConfig.FIREBASE_PROJECT_ID.startsWith("SET_")) {
-            val container = screen("Near-Chat Online")
-            label(container, "Firebase setup required", 21, fg)
-            label(container, "This APK is a buildable source prototype. Add your Firebase Android app ID, API key, and project ID in the build settings, and deploy firestore.rules before signing in.", 15, muted)
-            label(container, "See SETUP_FIREBASE.md in your GitHub repository.", 14, accent)
+            startActivity(Intent(this, DemoActivity::class.java))
+            finish()
             return
         }
         try {
@@ -102,6 +101,9 @@ class MainActivity : Activity() {
         }
         button(container, if (register) "Already registered? Sign in" else "New here? Create an account", secondary = true) {
             showSignIn(!register)
+        }
+        button(container, "Explore app without signing in", secondary = true) {
+            startActivity(Intent(this, DemoActivity::class.java))
         }
     }
 
