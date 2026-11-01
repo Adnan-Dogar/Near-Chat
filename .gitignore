@@ -1,6 +1,9 @@
-.gradle/
-.idea/
-local.properties
+**/.gradle/
 **/build/
-*.iml
-.DS_Store
+**/local.properties
+**/__pycache__/
+**/.pytest_cache/
+.env
+*.keystore
+*.jks
+*.log

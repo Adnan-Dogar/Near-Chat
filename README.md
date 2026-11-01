@@ -1,32 +1,43 @@
-# Near-Chat Android • v0.4 Interactive Demo
+# Near-Chat v0.7 — Contabo Self-Hosted Alpha
 
-An online-chat Android MVP with a **fully navigable local demo** that needs no Firebase login, API keys, or internet connection. The primary build is a **demo**, not a real messaging service.
+This is the first **real online** version of Near-Chat, not the Firebase-free fake-chat preview.
 
-## Try without Firebase
+- **Backend:** Python FastAPI + PostgreSQL, password hashing (Argon2id), signed 12-hour access tokens, direct and group chats, persistent text history, authenticated WebSocket live updates, block/report endpoints, basic API throttling.
+- **Android:** HTTPS server URL setup, signup/login, encrypted local token using Android Keystore, direct and group chats, sending/reading actual text messages and foreground WebSocket updates. Custom app ID (`com.nearchat.selfhost`) so it installs beside previous demos.
+- **Deployment:** Ubuntu 22.04 VPS, Docker Compose, Caddy reverse proxy and automatic HTTPS with a DNS hostname.
 
-Install the debug APK and open Near-Chat. If no Firebase configuration has been provided, the app goes directly into local Demo Mode with preloaded sample conversations. No setup wall. You can also open Demo Mode from the live sign-in page if Firebase has been configured.
+**This is an alpha, not a finished public social network.** No Firebase is needed, but **your VPS must be deployed and reachable over HTTPS** for chats to work. The code does not install itself on your server. Your Contabo plan (8 GB RAM / 2 CPU) is enough to begin testing with a small pilot; usage requirements depend on concurrent connections and traffic.
 
-### Demo interactions
+## The code
 
-- Newly designed teal Near-Chat launcher icon and branded header
-- Chat list, search across messages, pinned and unread states
-- Conversation pages, local send, saved demo history, reply and emoji reactions
-- Create sample contacts and group conversations on this phone
-- Pick a photo to preview as a local attachment
-- Status screen with interactive sample stories and editable own status
-- Calls screen with sample history; voice/video actions clearly **planned**, not active
-- Profile, about, appearance (dark/light), notification preference, privacy, plans and reset
+- `server/`: FastAPI service + schema + Caddy + PostgreSQL + Compose.
+- `android/`: Android Studio project for the actual online client, separate from the local preview.
+- `.github/workflows/selfhost-android-apk.yml`: builds a debug APK when the `selfhosted-vps` branch is pushed.
+- `DEPLOY_UBUNTU.md`: detailed server setup steps, no root passwords needed in chat.
 
-## Important limitations
+## Implemented online capabilities
 
-Demo Mode does NOT deliver messages to another phone, sync any chats, notify other users, make calls or run end-to-end encryption. Fake contacts and sample call history are labeled previews. Local demo data is saved in private app preferences, not uploaded.
+| Feature | State |
+|---|---|
+| Create username/password account | Backend + Android code |
+| Login, 12h signed token | Backend + Android code |
+| Find people by exact username | Backend |
+| One-to-one messaging | Backend + Android code |
+| Group messaging (up to 30 invitees) | Backend + Android code |
+| PostgreSQL message persistence | Backend |
+| Live foreground chat update | WebSocket |
+| Block and report user | Backend API, Android UI later |
+| Push notifications / calls / E2EE | Not implemented |
+| Photo/video/voice upload | Not implemented in the online alpha |
+| Password reset, email verification, abuse management | Not implemented |
 
-### Real online messaging
+Messages are protected **in transit by HTTPS/TLS** but **NOT end-to-end encrypted**. The VPS operator can access database message contents. Do not promote this app as private/E2EE. The backend runs **one API worker**; adding more workers will require cross-worker event fan-out (Redis/NATS). In-memory rate limiting is not sufficient for a public launch. Add automated database backups, monitoring, moderation, terms/privacy policy, retention rules, and secure release signing before inviting untrusted users.
 
-The Firebase-powered v0.3-style one-to-one/small-group messaging code still exists separately in `MainActivity.kt` and activates only when valid Firebase project settings are compiled into the app. See [SETUP_FIREBASE.md](SETUP_FIREBASE.md) and deploy [firestore.rules](firestore.rules). Firestore rules and security, account recovery, moderation, push notifications and encryption require additional work before any public launch.
+## Quick orientation
 
-## Build
+1. Complete `DEPLOY_UBUNTU.md` on the VPS. Use a domain or free DNS hostname pointing at the VPS public IP. Don't send SSH credentials in chats.
+2. Check `https://YOUR_HOSTNAME/healthz` returns `{ "ok": true }`.
+3. Download Android APK from the branch's GitHub Actions artifacts (or compile `android/` with Android Studio), install on two devices.
+4. Both devices enter `https://YOUR_HOSTNAME`, register different usernames/passwords, start a chat by username, and exchange text messages.
 
-GitHub Actions on `main` compiles a debug APK and uploads it as an artifact. The launcher demo works out of the box without configuration. Build uses Android SDK 35, JDK 17, Gradle 8.11.1, Kotlin 2.4 and Firebase Android SDK.
-
-**Roadmap:** validate demo → connect real backend → private chats & identity → notifications & media → safety, blocking and reporting → secure real-time calls → deeper social features.
+**Security note:** This alpha is not ready for open registration by the general public. Restrict access while validating security, and keep an updated server and regular off-server backups.

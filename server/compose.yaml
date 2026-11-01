@@ -1,0 +1,47 @@
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: nearchat
+      POSTGRES_USER: nearchat
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set in .env}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U nearchat -d nearchat"]
+      interval: 10s
+      timeout: 5s
+      retries: 8
+    networks: [internal]
+  api:
+    build: .
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql://nearchat:${POSTGRES_PASSWORD}@db:5432/nearchat
+      JWT_SECRET: ${JWT_SECRET:?Set in .env}
+    depends_on:
+      db:
+        condition: service_healthy
+    networks: [internal]
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    environment:
+      CHAT_DOMAIN: ${CHAT_DOMAIN:?Set in .env}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on: [api]
+    networks: [internal]
+volumes:
+  pgdata:
+  caddy_data:
+  caddy_config:
+networks:
+  internal:
