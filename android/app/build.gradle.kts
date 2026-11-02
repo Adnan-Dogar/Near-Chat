@@ -6,11 +6,11 @@ android {
     namespace = "com.nearchat.selfhost"
     compileSdk = 35
     defaultConfig {
-        applicationId = "com.nearchat.selfhost"
+        applicationId = "com.nearchat.selfhost.v08"
         minSdk = 26
         targetSdk = 35
-        versionCode = 7
-        versionName = "0.7.0-selfhost-alpha"
+        versionCode = 8
+        versionName = "0.8.0-selfhost-alpha"
     }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17

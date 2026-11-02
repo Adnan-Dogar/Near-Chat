@@ -55,7 +55,7 @@ async def lifespan(app: FastAPI):
         await pool.close()
 
 
-app = FastAPI(title="Near-Chat API", version="0.7.0", lifespan=lifespan,
+app = FastAPI(title="Near-Chat API", version="0.8.0", lifespan=lifespan,
               docs_url=None, redoc_url=None, openapi_url=None)
 
 
@@ -95,6 +95,23 @@ class Report(BaseModel):
     reason: str = Field(min_length=10, max_length=500)
 
 
+class ProfileUpdate(BaseModel):
+    display_name: str = Field(min_length=2, max_length=40)
+    bio: str = Field(max_length=160)
+
+
+class ChatOptions(BaseModel):
+    muted: bool = False
+    pinned: bool = False
+
+
+class Reaction(BaseModel):
+    emoji: str = Field(max_length=8)
+
+
+SUPPORTED_REACTIONS = {"👍", "❤️", "😂", "😮", "😢", "👏"}
+
+
 async def require_user(request: Request, authorization: Annotated[str | None, Header()] = None) -> uuid.UUID:
     if not authorization or not authorization.startswith("Bearer "):
         raise HTTPException(401, "Authentication required")
@@ -111,13 +128,18 @@ async def require_member(conn, chat_id: uuid.UUID, user_id: uuid.UUID):
 
 
 def user_out(row) -> dict:
-    return {"id": str(row["id"]), "username": row["username"], "display_name": row["display_name"]}
+    row = dict(row)
+    return {"id": str(row["id"]), "username": row["username"], "display_name": row["display_name"], "bio": row.get("bio", "")}
 
 
 def message_out(row) -> dict:
+    row = dict(row)
     return {"id": str(row["id"]), "chat_id": str(row["chat_id"]),
             "sender_id": str(row["sender_id"]), "body": row["body"],
-            "created_at": row["created_at"].isoformat()}
+            "created_at": row["created_at"].isoformat(),
+            "edited_at": row["edited_at"].isoformat() if row.get("edited_at") else None,
+            "deleted_at": row["deleted_at"].isoformat() if row.get("deleted_at") else None,
+            "reactions": json.loads(row["reactions"]) if row.get("reactions") else []}
 
 
 @app.get("/healthz")
@@ -136,7 +158,7 @@ async def register(data: Signup, request: Request):
                                uid, data.username, data.display_name.strip(), hash_password(data.password))
         except asyncpg.UniqueViolationError:
             raise HTTPException(409, "Username unavailable")
-    return {"token": make_token(uid, SECRET), "user": {"id": str(uid), "username": data.username, "display_name": data.display_name.strip()}}
+    return {"token": make_token(uid, SECRET), "user": {"id": str(uid), "username": data.username, "display_name": data.display_name.strip(), "bio": ""}}
 
 
 @app.post("/v1/auth/login")
@@ -153,6 +175,17 @@ async def login(data: Credentials, request: Request):
 async def me(request: Request, uid: uuid.UUID = Depends(require_user)):
     async with request.app.state.pool.acquire() as conn:
         row = await conn.fetchrow("SELECT * FROM users WHERE id=$1", uid)
+    if not row:
+        raise HTTPException(401, "Account no longer exists")
+    return user_out(row)
+
+
+@app.patch("/v1/me")
+async def update_profile(data: ProfileUpdate, request: Request, uid: uuid.UUID = Depends(require_user)):
+    async with request.app.state.pool.acquire() as conn:
+        row = await conn.fetchrow("""UPDATE users SET display_name=$2, bio=$3 WHERE id=$1
+                      RETURNING id, username, display_name, bio""",
+                                  uid, data.display_name.strip(), data.bio.strip())
     if not row:
         raise HTTPException(401, "Account no longer exists")
     return user_out(row)
@@ -207,6 +240,10 @@ async def create_group(data: Group, request: Request, uid: uuid.UUID = Depends(r
             members = list({uid, *(r["id"] for r in rows)})
             if len(members) < 2:
                 raise HTTPException(400, "Add at least one other participant")
+            blocked_pair = await conn.fetchval("""SELECT 1 FROM blocks WHERE
+                 blocker_id=ANY($1::uuid[]) AND blocked_id=ANY($1::uuid[]) LIMIT 1""", members)
+            if blocked_pair:
+                raise HTTPException(403, "Cannot form a group with blocked participants")
             chat = uuid.uuid4()
             await conn.execute("INSERT INTO conversations(id,kind,title,created_by) VALUES($1,'group',$2,$3)", chat, data.title.strip(), uid)
             await conn.executemany("INSERT INTO memberships(chat_id,user_id) VALUES($1,$2)", [(chat, u) for u in members])
@@ -220,19 +257,41 @@ async def chats(request: Request, uid: uuid.UUID = Depends(require_user)):
         rows = await conn.fetch("""SELECT c.id,c.kind,c.title,c.created_at,
           COALESCE((SELECT string_agg(u.display_name, ', ' ORDER BY u.username)
              FROM memberships m JOIN users u ON u.id=m.user_id WHERE m.chat_id=c.id AND m.user_id<>$1),'') peer_names,
-          (SELECT body FROM messages WHERE chat_id=c.id ORDER BY created_at DESC LIMIT 1) last_message
+          (SELECT CASE WHEN deleted_at IS NULL THEN body ELSE 'Message deleted' END
+           FROM messages WHERE chat_id=c.id ORDER BY created_at DESC LIMIT 1) last_message,
+          COALESCE(cp.muted, false) muted, COALESCE(cp.pinned,false) pinned
           FROM conversations c JOIN memberships mine ON mine.chat_id=c.id AND mine.user_id=$1
-          ORDER BY COALESCE((SELECT max(created_at) FROM messages WHERE chat_id=c.id),c.created_at) DESC LIMIT 100""", uid)
+          LEFT JOIN chat_preferences cp ON cp.chat_id=c.id AND cp.user_id=$1
+          ORDER BY COALESCE(cp.pinned,false) DESC,
+          COALESCE((SELECT max(created_at) FROM messages WHERE chat_id=c.id),c.created_at) DESC LIMIT 100""", uid)
     return [{"id": str(r["id"]), "kind": r["kind"], "title": r["title"] if r["kind"]=="group" else r["peer_names"],
-             "last_message": r["last_message"] or ""} for r in rows]
+             "last_message": r["last_message"] or "", "muted":r["muted"], "pinned":r["pinned"]} for r in rows]
+
+
+@app.put("/v1/chats/{chat_id}/options")
+async def set_chat_options(chat_id: uuid.UUID, data: ChatOptions, request: Request,
+                           uid: uuid.UUID = Depends(require_user)):
+    async with request.app.state.pool.acquire() as conn:
+        await require_member(conn, chat_id, uid)
+        await conn.execute("""INSERT INTO chat_preferences(chat_id,user_id,muted,pinned)
+               VALUES($1,$2,$3,$4) ON CONFLICT(chat_id,user_id)
+               DO UPDATE SET muted=EXCLUDED.muted,pinned=EXCLUDED.pinned""",
+                           chat_id, uid, data.muted, data.pinned)
+    return {"muted": data.muted, "pinned": data.pinned}
 
 
 @app.get("/v1/chats/{chat_id}/messages")
 async def messages(chat_id: uuid.UUID, request: Request, before: datetime | None = None, uid: uuid.UUID = Depends(require_user)):
     async with request.app.state.pool.acquire() as conn:
         await require_member(conn, chat_id, uid)
-        rows = await conn.fetch("""SELECT * FROM messages WHERE chat_id=$1 AND ($2::timestamptz IS NULL OR created_at<$2)
-                  ORDER BY created_at DESC LIMIT 100""", chat_id, before)
+        rows = await conn.fetch("""SELECT m.id,m.chat_id,m.sender_id,
+          CASE WHEN m.deleted_at IS NULL THEN m.body ELSE 'Message deleted' END body,
+          m.created_at,m.edited_at,m.deleted_at,
+          COALESCE((SELECT json_agg(json_build_object('emoji',r.emoji,'username',u.username))::text
+               FROM reactions r JOIN users u ON u.id=r.user_id WHERE r.message_id=m.id),'[]') reactions
+          FROM messages m WHERE m.chat_id=$1
+          AND ($2::timestamptz IS NULL OR m.created_at<$2)
+          ORDER BY m.created_at DESC LIMIT 100""", chat_id, before)
     return [message_out(r) for r in reversed(rows)]
 
 
@@ -257,6 +316,77 @@ async def send(chat_id: uuid.UUID, data: MessageIn, request: Request, uid: uuid.
     return payload
 
 
+@app.get("/v1/chats/{chat_id}/search")
+async def search_messages(chat_id: uuid.UUID, term: str, request: Request,
+                          uid: uuid.UUID = Depends(require_user)):
+    term = term.strip()
+    if not 2 <= len(term) <= 80:
+        raise HTTPException(400, "Search term must be 2–80 characters")
+    throttle(f"search:{uid}", 45, 60)
+    async with request.app.state.pool.acquire() as conn:
+        await require_member(conn, chat_id, uid)
+        rows = await conn.fetch("""SELECT id,chat_id,sender_id,body,created_at,edited_at,deleted_at
+          FROM messages WHERE chat_id=$1 AND deleted_at IS NULL
+          AND strpos(lower(body),lower($2))>0
+          ORDER BY created_at DESC LIMIT 50""", chat_id, term)
+    return [message_out(r) for r in rows]
+
+
+@app.patch("/v1/chats/{chat_id}/messages/{message_id}")
+async def edit_message(chat_id: uuid.UUID, message_id: uuid.UUID, data: MessageIn,
+                       request: Request, uid: uuid.UUID = Depends(require_user)):
+    throttle(f"edit:{uid}", 90, 60)
+    async with request.app.state.pool.acquire() as conn:
+        await require_member(conn, chat_id, uid)
+        row = await conn.fetchrow("""UPDATE messages SET body=$4,edited_at=now()
+          WHERE id=$2 AND chat_id=$1 AND sender_id=$3 AND deleted_at IS NULL
+          AND created_at > now()-interval '15 minutes' RETURNING *""",
+                                  chat_id,message_id,uid,data.body.strip())
+        if not row:
+            raise HTTPException(403, "Only your own recent messages can be edited")
+        members = await conn.fetch("SELECT user_id FROM memberships WHERE chat_id=$1",chat_id)
+    output = message_out(row)
+    await publish([x["user_id"] for x in members], {"type":"message_updated","message":output})
+    return output
+
+
+@app.delete("/v1/chats/{chat_id}/messages/{message_id}")
+async def delete_message(chat_id: uuid.UUID, message_id: uuid.UUID,
+                         request: Request,uid: uuid.UUID = Depends(require_user)):
+    async with request.app.state.pool.acquire() as conn:
+        await require_member(conn, chat_id, uid)
+        row = await conn.fetchrow("""UPDATE messages SET body='',deleted_at=now()
+           WHERE id=$2 AND chat_id=$1 AND sender_id=$3 AND deleted_at IS NULL
+           RETURNING *""",chat_id,message_id,uid)
+        if not row:
+            raise HTTPException(403, "Only your own existing messages can be deleted")
+        await conn.execute("DELETE FROM reactions WHERE message_id=$1",message_id)
+        members=await conn.fetch("SELECT user_id FROM memberships WHERE chat_id=$1",chat_id)
+    output=message_out(row); output["body"]="Message deleted"
+    await publish([x["user_id"] for x in members], {"type":"message_updated","message":output})
+    return output
+
+
+@app.put("/v1/chats/{chat_id}/messages/{message_id}/reaction")
+async def react(chat_id: uuid.UUID, message_id: uuid.UUID, data: Reaction,
+                request: Request,uid: uuid.UUID = Depends(require_user)):
+    if data.emoji and data.emoji not in SUPPORTED_REACTIONS:
+        raise HTTPException(400,"Unsupported reaction")
+    async with request.app.state.pool.acquire() as conn:
+        await require_member(conn,chat_id,uid)
+        exists=await conn.fetchval("SELECT 1 FROM messages WHERE id=$1 AND chat_id=$2 AND deleted_at IS NULL",message_id,chat_id)
+        if not exists:
+            raise HTTPException(404,"Message not found")
+        if data.emoji:
+            await conn.execute("""INSERT INTO reactions(message_id,user_id,emoji) VALUES($1,$2,$3)
+                ON CONFLICT(message_id,user_id) DO UPDATE SET emoji=EXCLUDED.emoji""", message_id, uid, data.emoji)
+        else:
+            await conn.execute("DELETE FROM reactions WHERE message_id=$1 AND user_id=$2",message_id,uid)
+        members=await conn.fetch("SELECT user_id FROM memberships WHERE chat_id=$1",chat_id)
+    await publish([x["user_id"] for x in members], {"type":"reaction_updated", "chat_id":str(chat_id)})
+    return {"ok":True}
+
+
 @app.post("/v1/blocks/{username}")
 async def block(username: str, request: Request, uid: uuid.UUID = Depends(require_user)):
     async with request.app.state.pool.acquire() as conn:
@@ -264,7 +394,18 @@ async def block(username: str, request: Request, uid: uuid.UUID = Depends(requir
         if not other or other==uid:
             raise HTTPException(404, "User not found")
         await conn.execute("INSERT INTO blocks(blocker_id,blocked_id) VALUES($1,$2) ON CONFLICT DO NOTHING", uid, other)
+    await publish([uid, other], {"type":"block_updated"})
     return {"ok": True}
+
+
+@app.delete("/v1/blocks/{username}")
+async def unblock(username: str, request: Request, uid: uuid.UUID = Depends(require_user)):
+    async with request.app.state.pool.acquire() as conn:
+        other = await conn.fetchval("SELECT id FROM users WHERE username=$1",username.lower())
+        if not other:
+            raise HTTPException(404,"User not found")
+        await conn.execute("DELETE FROM blocks WHERE blocker_id=$1 AND blocked_id=$2",uid,other)
+    return {"ok":True}
 
 
 @app.post("/v1/reports", status_code=201)
@@ -298,6 +439,10 @@ async def websocket(ws: WebSocket):
         frame = await asyncio.wait_for(ws.receive_json(), timeout=5)
         uid = parse_token(frame.get("token", "") if isinstance(frame,dict) else "", SECRET)
         if uid is None:
+            await ws.close(code=1008)
+            return
+        active = await app.state.pool.fetchval("SELECT 1 FROM users WHERE id=$1",uid)
+        if not active:
             await ws.close(code=1008)
             return
         _connections[uid].add(ws)

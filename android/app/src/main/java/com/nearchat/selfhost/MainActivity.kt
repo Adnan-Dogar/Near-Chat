@@ -11,6 +11,7 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.text.InputType
+import java.net.URLEncoder
 import android.view.Gravity
 import android.view.View
 import android.widget.Button
@@ -35,7 +36,7 @@ import java.net.URI
 import java.util.UUID
 import java.util.concurrent.TimeUnit
 
-/** Real self-hosted REST + WebSocket chat alpha. No Firebase or unencrypted HTTP. */
+/** Real self-hosted REST + WebSocket chat alpha v0.8. No Firebase or unencrypted HTTP. */
 class MainActivity : Activity() {
     private val navy = Color.rgb(12, 22, 37)
     private val cardColor = Color.rgb(28, 44, 63)
@@ -125,6 +126,9 @@ class MainActivity : Activity() {
         if (token.isNotBlank()) builder.header("Authorization", "Bearer $token")
         val req = when (method) {
             "POST" -> builder.post((body ?: JSONObject()).toString().toRequestBody(jsonType)).build()
+            "PATCH" -> builder.patch((body ?: JSONObject()).toString().toRequestBody(jsonType)).build()
+            "PUT" -> builder.put((body ?: JSONObject()).toString().toRequestBody(jsonType)).build()
+            "DELETE" -> builder.delete().build()
             else -> builder.get().build()
         }
         client.newCall(req).enqueue(object : Callback {
@@ -205,6 +209,8 @@ class MainActivity : Activity() {
         button(box,"Start chat by username") { promptDirect() }
         button(box,"Create group",true) { promptGroup() }
         button(box,"Refresh chats",true) { refreshChats() }
+        button(box,"Edit my profile",true) { editProfile() }
+        button(box,"Safety: block / unblock / report",true) { safetyOptions() }
         button(box,"Copy my username",true) {
             (getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager).setPrimaryClip(ClipData.newPlainText("Near-Chat username",username))
             notice("Username copied")
@@ -225,7 +231,8 @@ class MainActivity : Activity() {
                 val c=chats.getJSONObject(i)
                 val id=c.getString("id"); val title=c.optString("title","Chat")
                 val last=c.optString("last_message","")
-                button(view, (if(c.optString("kind")=="group") "👥 " else "💬 ")+title+(if(last.isNotEmpty()) "\n"+last.take(40) else ""),true) {
+                button(view, (if(c.optBoolean("pinned")) "📌 " else "")+(if(c.optBoolean("muted")) "🔕 " else "")+
+                    (if(c.optString("kind")=="group") "👥 " else "💬 ")+title+(if(last.isNotEmpty()) "\n"+last.take(40) else ""),true) {
                     openChat(id,title)
                 }
             }
@@ -259,6 +266,8 @@ class MainActivity : Activity() {
         chatId=id;chatTitle=title
         val box=screen(title)
         button(box,"← All conversations",true) { showChats() }
+        button(box,"Chat options: mute / pin",true) { chatOptions(id) }
+        button(box,"Search conversation",true) { promptSearch(id) }
         val scroll=ScrollView(this)
         val list=LinearLayout(this).apply { orientation=LinearLayout.VERTICAL }
         scroll.addView(list)
@@ -284,19 +293,129 @@ class MainActivity : Activity() {
             for(i in 0 until items.length()) {
                 val msg=items.getJSONObject(i)
                 val mine=msg.getString("sender_id")==selfId
-                val label=txt((if(mine) "You" else msg.getString("sender_id").take(8))+"\n"+msg.optString("body"),14f,
+                val reactions = msg.optJSONArray("reactions")
+                val emojis = (0 until (reactions?.length() ?: 0)).joinToString(" ") { index ->
+                    reactions?.optJSONObject(index)?.optString("emoji") ?: ""
+                }
+                val edited = if(msg.optString("edited_at") !in listOf("", "null")) " · edited" else ""
+                val label=txt((if(mine) "You" else msg.getString("sender_id").take(8))+edited+"\n"+
+                    msg.optString("body")+(if(emojis.isNotBlank()) "\n$emojis" else ""),14f,
                     if(mine) navy else Color.WHITE).apply {
                         background=bg(if(mine) mint else cardColor)
                         setPadding(dp(14),dp(12),dp(14),dp(12))
                         maxWidth=(resources.displayMetrics.widthPixels*0.80f).toInt()
                     }
                 val wrap=LinearLayout(this).apply { gravity=if(mine) Gravity.RIGHT else Gravity.LEFT }
+                label.setOnLongClickListener {
+                    messageActions(id, msg, mine)
+                    true
+                }
                 wrap.addView(label)
                 list.addView(wrap, LinearLayout.LayoutParams(-1,-2).apply { setMargins(dp(14),dp(6),dp(14),dp(6)) })
             }
             rootScroll?.post { rootScroll?.fullScroll(View.FOCUS_DOWN) }
         }
     }
+    private fun editProfile() {
+        api("GET", "/v1/me", null, { current ->
+            val frame=LinearLayout(this).apply { orientation=LinearLayout.VERTICAL; setPadding(dp(18),0,dp(18),0) }
+            val display=EditText(this).apply { hint="Display name"; setText(current.optString("display_name")); filters=arrayOf(android.text.InputFilter.LengthFilter(40)) }
+            val bio=EditText(this).apply { hint="Status / bio (160 characters max)"; setText(current.optString("bio")); filters=arrayOf(android.text.InputFilter.LengthFilter(160)) }
+            frame.addView(display); frame.addView(bio)
+            AlertDialog.Builder(this).setTitle("Edit profile").setView(frame)
+                .setPositiveButton("Save") { _, _ ->
+                    val name=display.text.toString().trim()
+                    if(name.length !in 2..40) { notice("Display name must be 2–40 characters"); return@setPositiveButton }
+                    api("PATCH","/v1/me",JSONObject().put("display_name",name).put("bio",bio.text.toString().trim()),{
+                        notice("Profile updated"); showChats()
+                    })
+                }.setNegativeButton("Cancel",null).show()
+        })
+    }
+
+    private fun safetyOptions() {
+        val field=EditText(this).apply { hint="Enter exact username"; setSingleLine(true); setPadding(dp(20),dp(6),dp(20),dp(6)) }
+        AlertDialog.Builder(this).setTitle("Safety tools").setMessage("Choose a user. Blocking prevents direct messages. Reporting sends your reason to the server administrator for review.")
+            .setView(field).setPositiveButton("Next") { _, _ ->
+                val name=field.text.toString().trim().lowercase()
+                if(!Regex("^[a-z0-9_]{3,24}$").matches(name) || name==username) { notice("Enter a different valid username"); return@setPositiveButton }
+                AlertDialog.Builder(this).setTitle("@$name").setItems(arrayOf("Block user","Unblock user","Report user")) { _,choice ->
+                    when(choice) {
+                        0 -> api("POST","/v1/blocks/$name",JSONObject(),{ notice("User blocked") })
+                        1 -> api("DELETE","/v1/blocks/$name",null,{ notice("User unblocked") })
+                        2 -> {
+                            val reason=EditText(this).apply { hint="Reason (at least 10 characters)"; setPadding(dp(16),dp(4),dp(16),dp(4)) }
+                            AlertDialog.Builder(this).setTitle("Report @$name").setView(reason)
+                                .setPositiveButton("Submit") { _, _ ->
+                                    if(reason.text.toString().trim().length<10) { notice("Please give a reason of 10+ characters"); return@setPositiveButton }
+                                    api("POST","/v1/reports",JSONObject().put("username",name).put("reason",reason.text.toString().trim()),{ notice("Report received") })
+                                }.setNegativeButton("Cancel",null).show()
+                        }
+                    }
+                }.show()
+            }.setNegativeButton("Cancel",null).show()
+    }
+
+    private fun chatOptions(id: String) {
+        // Server stores the flags for each authenticated member independently.
+        getArray("/v1/chats") { chats ->
+            val chat=(0 until chats.length()).map { chats.getJSONObject(it) }.firstOrNull { it.optString("id")==id }
+            if(chat==null) { notice("Chat not available"); return@getArray }
+            var muted=chat.optBoolean("muted")
+            var pinned=chat.optBoolean("pinned")
+            AlertDialog.Builder(this).setTitle("Conversation options")
+                .setMultiChoiceItems(arrayOf("Mute this chat","Pin to top"),booleanArrayOf(muted,pinned)) { _,pos,enabled ->
+                    if(pos==0) muted=enabled else pinned=enabled
+                }.setPositiveButton("Save") { _, _ ->
+                    api("PUT","/v1/chats/$id/options",JSONObject().put("muted",muted).put("pinned",pinned),{ notice("Chat preferences saved") })
+                }.setNegativeButton("Cancel",null).show()
+        }
+    }
+
+    private fun promptSearch(id: String) {
+        val term=EditText(this).apply { hint="Search messages"; setSingleLine(true) }
+        AlertDialog.Builder(this).setTitle("Search conversation").setView(term)
+            .setPositiveButton("Search") { _, _ ->
+                val value=term.text.toString().trim()
+                if(value.length !in 2..80) { notice("Enter 2–80 characters"); return@setPositiveButton }
+                val q=URLEncoder.encode(value,"UTF-8")
+                getArray("/v1/chats/$id/search?term=$q") { found ->
+                    val results=(0 until found.length()).map { found.optJSONObject(it)?.optString("body") ?: "" }
+                    AlertDialog.Builder(this).setTitle("${results.size} search results")
+                        .setItems(results.take(50).toTypedArray()) { _, _ -> refreshMessages() }
+                        .setPositiveButton("Close",null).show()
+                }
+            }.setNegativeButton("Cancel",null).show()
+    }
+
+    private fun messageActions(chat: String, message: JSONObject, mine: Boolean) {
+        val id=message.optString("id")
+        if(id.isEmpty() || !message.isNull("deleted_at")) return
+        val options=if(mine) arrayOf("React 👍","React ❤️","React 😂","Remove reaction","Edit message","Delete message")
+                    else arrayOf("React 👍","React ❤️","React 😂","Remove reaction")
+        AlertDialog.Builder(this).setTitle("Message options")
+            .setItems(options) { _,selected ->
+                if(selected<=3) {
+                    val emoji=when(selected) { 0->"👍";1->"❤️";2->"😂";else->"" }
+                    api("PUT","/v1/chats/$chat/messages/$id/reaction",JSONObject().put("emoji",emoji),{ refreshMessages() })
+                } else if(selected==4 && mine) {
+                    val edit=EditText(this).apply { setText(message.optString("body")); filters=arrayOf(android.text.InputFilter.LengthFilter(4000)) }
+                    AlertDialog.Builder(this).setTitle("Edit your message (within 15 minutes)").setView(edit)
+                        .setPositiveButton("Save") { _, _ ->
+                            val body=edit.text.toString().trim()
+                            if(body.isBlank()) { notice("Message cannot be empty"); return@setPositiveButton }
+                            api("PATCH","/v1/chats/$chat/messages/$id",JSONObject().put("body",body).put("client_id",UUID.randomUUID().toString()),{ refreshMessages() })
+                        }.setNegativeButton("Cancel",null).show()
+                } else if(selected==5 && mine) {
+                    AlertDialog.Builder(this).setTitle("Delete your message?")
+                        .setMessage("This will replace the message with a deletion notice for all members.")
+                        .setPositiveButton("Delete") { _, _ ->
+                            api("DELETE","/v1/chats/$chat/messages/$id",null,{ refreshMessages() })
+                        }.setNegativeButton("Cancel",null).show()
+                }
+            }.show()
+    }
+
     private fun openSocket() {
         socket?.close(1000,"reconnect")
         if (base.isEmpty() || token.isEmpty() || closed) return
@@ -306,7 +425,7 @@ class MainActivity : Activity() {
             override fun onMessage(ws: WebSocket, text: String) {
                 try {
                     val event=JSONObject(text)
-                    if(event.optString("type")=="message" || event.optString("type")=="chat_created") {
+                    if(event.optString("type") in listOf("message","chat_created","message_updated","reaction_updated","block_updated")) {
                         runOnUiThread { if(chatId!=null) refreshMessages() else refreshChats() }
                     }
                 } catch (_: Exception) {}

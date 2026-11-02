@@ -29,3 +29,21 @@ CREATE TABLE IF NOT EXISTS reports (
  reported_user_id UUID NOT NULL REFERENCES users(id), reason TEXT NOT NULL,
  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- Idempotent alpha migration for v0.8; do not drop existing chats.
+ALTER TABLE users ADD COLUMN IF NOT EXISTS bio TEXT NOT NULL DEFAULT '';
+ALTER TABLE messages ADD COLUMN IF NOT EXISTS edited_at TIMESTAMPTZ;
+ALTER TABLE messages ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;
+CREATE TABLE IF NOT EXISTS reactions (
+  message_id UUID NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  emoji TEXT NOT NULL,
+  PRIMARY KEY(message_id,user_id)
+);
+CREATE TABLE IF NOT EXISTS chat_preferences (
+  chat_id UUID NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  muted BOOLEAN NOT NULL DEFAULT false,
+  pinned BOOLEAN NOT NULL DEFAULT false,
+  PRIMARY KEY(chat_id,user_id)
+);

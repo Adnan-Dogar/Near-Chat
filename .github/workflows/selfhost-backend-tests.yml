@@ -1,0 +1,27 @@
+name: Near-Chat backend security and contract tests
+on:
+  push:
+    branches: [selfhosted-vps, selfhosted-v08]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  backend-tests:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: server
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install dependencies
+        run: python -m pip install -r requirements.txt pytest
+      - name: Compile and test
+        env:
+          JWT_SECRET: alpha-testing-local-only-secret-1234567890123456
+          DATABASE_URL: postgresql://placeholder:password@localhost/db
+        run: |
+          python -m compileall -q app
+          python -m pytest -q tests

@@ -1,7 +1,7 @@
 name: Near-Chat Self-Hosted Android APK
 on:
   push:
-    branches: [selfhosted-vps]
+    branches: [selfhosted-vps, selfhosted-v08]
   workflow_dispatch:
 permissions:
   contents: read
